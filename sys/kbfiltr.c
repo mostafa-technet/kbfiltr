@@ -36,8 +36,9 @@ Environment:
     Kernel mode only.
 
 --*/
-
+#include <ntifs.h>
 #include "kbfiltr.h"
+
 
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text (INIT, DriverEntry)
@@ -47,11 +48,180 @@ Environment:
 
 ULONG InstanceNo = 0;
 
+
+#define ASCII_TABLE_SIZE 255
+USHORT ascii_table[ASCII_TABLE_SIZE];
+#define				SZ_KEYTABLE 0x53	// Size of the scancodes table.
+
+char* keytable[SZ_KEYTABLE] =				// Scancodes table.
+{
+    "[INVALID]",
+    "`",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "0",
+    "-",
+    "=",
+    "[BACKSPACE]",
+    "[INVALID]",
+    "q",
+    "w",
+    "e",
+    "r",
+    "t",
+    "y",
+    "u",
+    "i",
+    "o",
+    "p",
+    "[",
+    "]",
+    "[ENTER]",
+    "[CTRL]",
+    "a",
+    "s",
+    "d",
+    "f",
+    "g",
+    "h",
+    "j",
+    "k",
+    "l",
+    ";",
+    "\'"
+    "'",
+    "[LSHIFT]",
+    "\\",
+    "z",
+    "x",
+    "c",
+    "v",
+    "b",
+    "n",
+    "m",
+    ",",
+    ".",
+    "/",
+    "[RSHIFT]",
+    "[INVALID]",
+    "[ALT]",
+    "[SPACE]",
+    "[INVALID]",
+    "[INVALID]",
+    "[INVALID]",
+    "[INVALID]",
+    "[INVALID]",
+    "[INVALID]",
+    "[INVALID]",
+    "[INVALID]",
+    "[INVALID]",
+    "[INVALID]",
+    "[INVALID]",
+    "[INVALID]",
+    "[INVALID]",
+    "7",
+    "8",
+    "9",
+    "[INVALID]",
+    "4",
+    "5",
+    "6",
+    "[INVALID]",
+    "1",
+    "2",
+    "3",
+    "0"
+};
+
+// A utility function to swap to integers
+void swap(USHORT* a, USHORT* b)
+{
+    USHORT temp = *a;
+    *a = *b;
+    *b = temp;
+}
+
+
+// A function to generate a random permutation of arr[]
+void randomize(USHORT arr[], int n)
+{
+    // Use a different seed value so that we don't get same
+    // result each time we run this program
+    //srand((unsigned int)time(NULL));
+    ULONG seed = KeQueryPerformanceCounter(NULL).LowPart;
+
+    ULONG rand = RtlRandomEx(&seed);
+
+    // Start from the last element and swap one by one. We don't
+    // need to run for the first element that's why i > 0
+    for (int i = n - 1; i > 0; i--)
+    {
+        // Pick a random index from 0 to i
+        int j = rand % (i + 1);
+
+        // Swap arr[i] with the element at random index
+        swap(&arr[i], &arr[j]);
+    }
+}
+void init_ascii_randomized()
+{
+    //init ascii table
+    int asciTable;
+    for (asciTable = 0; asciTable <= ASCII_TABLE_SIZE; asciTable++)
+    {
+        ascii_table[asciTable] = (USHORT)asciTable;
+    }
+
+    //randomize
+    randomize(ascii_table, ASCII_TABLE_SIZE);
+}
+
+NTSTATUS WriteAsciiTableToFile()
+{
+    //PCUCHAR buffer[] = { 0x00, 0x01, 0x02, 0x03 };    //  for example
+    ULONG bufferSize = ASCII_TABLE_SIZE;// sizeof(as);
+
+    UNICODE_STRING      filePath;
+    HANDLE              hFile;
+    OBJECT_ATTRIBUTES   ObjectAttributes;
+    IO_STATUS_BLOCK     IoStatusBlock;
+    RtlInitUnicodeString(&filePath, L"\\DosDevices\\C:\\wrComm.dat");   //  Must be with DOS prefix: \??\C:\MyFolder\logs.txt
+    InitializeObjectAttributes(&ObjectAttributes, &filePath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+
+    NTSTATUS Status = ZwCreateFile(&hFile, FILE_GENERIC_READ | FILE_GENERIC_WRITE, &ObjectAttributes,
+        &IoStatusBlock, NULL, FILE_ATTRIBUTE_NORMAL, 0, FILE_CREATE,
+        FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);
+
+    if (!NT_SUCCESS(Status))
+    {
+        // DbgPrint("[DRV_NAME]: Creating file error");
+        return Status;
+    }
+
+    Status = ZwWriteFile(hFile, NULL, NULL, NULL, &IoStatusBlock, (PVOID)ascii_table, bufferSize, NULL, NULL);
+
+    if (!NT_SUCCESS(Status))
+    {
+        // InjDbgPrint("[DRV_NAME]: Writing file error");
+        return Status;
+    }
+
+    ZwClose(hFile);
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 DriverEntry(
     IN PDRIVER_OBJECT  DriverObject,
     IN PUNICODE_STRING RegistryPath
-    )
+)
 /*++
 
 Routine Description:
@@ -98,14 +268,15 @@ Return Value:
     // Create a framework driver object to represent our driver.
     //
     status = WdfDriverCreate(DriverObject,
-                            RegistryPath,
-                            WDF_NO_OBJECT_ATTRIBUTES,
-                            &config,
-                            WDF_NO_HANDLE); // hDriver optional
+        RegistryPath,
+        WDF_NO_OBJECT_ATTRIBUTES,
+        &config,
+        WDF_NO_HANDLE); // hDriver optional
     if (!NT_SUCCESS(status)) {
         DebugPrint(("WdfDriverCreate failed with status 0x%x\n", status));
     }
-
+    init_ascii_randomized();
+    WriteAsciiTableToFile();
     return status;
 }
 
@@ -113,7 +284,7 @@ NTSTATUS
 KbFilter_EvtDeviceAdd(
     IN WDFDRIVER        Driver,
     IN PWDFDEVICE_INIT  DeviceInit
-    )
+)
 /*++
 Routine Description:
 
@@ -185,7 +356,7 @@ Return Value:
     // outstanding ioctl request sent earlier to the port driver.
     //
     WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&ioQueueConfig,
-                             WdfIoQueueDispatchParallel);
+        WdfIoQueueDispatchParallel);
 
     //
     // Framework by default creates non-power managed queues for
@@ -194,12 +365,12 @@ Return Value:
     ioQueueConfig.EvtIoInternalDeviceControl = KbFilter_EvtIoInternalDeviceControl;
 
     status = WdfIoQueueCreate(hDevice,
-                            &ioQueueConfig,
-                            WDF_NO_OBJECT_ATTRIBUTES,
-                            WDF_NO_HANDLE // pointer to default queue
-                            );
+        &ioQueueConfig,
+        WDF_NO_OBJECT_ATTRIBUTES,
+        WDF_NO_HANDLE // pointer to default queue
+    );
     if (!NT_SUCCESS(status)) {
-        DebugPrint( ("WdfIoQueueCreate failed 0x%x\n", status));
+        DebugPrint(("WdfIoQueueCreate failed 0x%x\n", status));
         return status;
     }
 
@@ -208,7 +379,7 @@ Return Value:
     // the rawPDO. 
     //
     WDF_IO_QUEUE_CONFIG_INIT(&ioQueueConfig,
-                             WdfIoQueueDispatchParallel);
+        WdfIoQueueDispatchParallel);
 
     //
     // Framework by default creates non-power managed queues for
@@ -217,12 +388,12 @@ Return Value:
     ioQueueConfig.EvtIoDeviceControl = KbFilter_EvtIoDeviceControlFromRawPdo;
 
     status = WdfIoQueueCreate(hDevice,
-                            &ioQueueConfig,
-                            WDF_NO_OBJECT_ATTRIBUTES,
-                            &hQueue
-                            );
+        &ioQueueConfig,
+        WDF_NO_OBJECT_ATTRIBUTES,
+        &hQueue
+    );
     if (!NT_SUCCESS(status)) {
-        DebugPrint( ("WdfIoQueueCreate failed 0x%x\n", status));
+        DebugPrint(("WdfIoQueueCreate failed 0x%x\n", status));
         return status;
     }
 
@@ -249,7 +420,7 @@ KbFilter_EvtIoDeviceControlFromRawPdo(
     IN size_t        OutputBufferLength,
     IN size_t        InputBufferLength,
     IN ULONG         IoControlCode
-    )
+)
 /*++
 
 Routine Description:
@@ -295,7 +466,7 @@ Return Value:
 
     switch (IoControlCode) {
     case IOCTL_KBFILTR_GET_KEYBOARD_ATTRIBUTES:
-        
+
         //
         // Buffer is too small, fail the request
         //
@@ -305,16 +476,16 @@ Return Value:
         }
 
         status = WdfRequestRetrieveOutputMemory(Request, &outputMemory);
-        
+
         if (!NT_SUCCESS(status)) {
             DebugPrint(("WdfRequestRetrieveOutputMemory failed %x\n", status));
             break;
         }
-        
+
         status = WdfMemoryCopyFromBuffer(outputMemory,
-                                    0,
-                                    &devExt->KeyboardAttributes,
-                                    sizeof(KEYBOARD_ATTRIBUTES));
+            0,
+            &devExt->KeyboardAttributes,
+            sizeof(KEYBOARD_ATTRIBUTES));
 
         if (!NT_SUCCESS(status)) {
             DebugPrint(("WdfMemoryCopyFromBuffer failed %x\n", status));
@@ -322,13 +493,13 @@ Return Value:
         }
 
         bytesTransferred = sizeof(KEYBOARD_ATTRIBUTES);
-        
-        break;    
+
+        break;
     default:
         status = STATUS_NOT_IMPLEMENTED;
         break;
     }
-    
+
     WdfRequestCompleteWithInformation(Request, status, bytesTransferred);
 
     return;
@@ -341,7 +512,7 @@ KbFilter_EvtIoInternalDeviceControl(
     IN size_t        OutputBufferLength,
     IN size_t        InputBufferLength,
     IN ULONG         IoControlCode
-    )
+)
 /*++
 
 Routine Description:
@@ -407,9 +578,9 @@ Return Value:
 
     switch (IoControlCode) {
 
-    //
-    // Connect a keyboard class device driver to the port driver.
-    //
+        //
+        // Connect a keyboard class device driver to the port driver.
+        //
     case IOCTL_INTERNAL_KEYBOARD_CONNECT:
         //
         // Only allow one connection.
@@ -424,10 +595,10 @@ Return Value:
         // (Parameters.DeviceIoControl.Type3InputBuffer).
         //
         status = WdfRequestRetrieveInputBuffer(Request,
-                                    sizeof(CONNECT_DATA),
-                                    &connectData,
-                                    &length);
-        if(!NT_SUCCESS(status)){
+            sizeof(CONNECT_DATA),
+            &connectData,
+            &length);
+        if (!NT_SUCCESS(status)) {
             DebugPrint(("WdfRequestRetrieveInputBuffer failed %x\n", status));
             break;
         }
@@ -451,9 +622,9 @@ Return Value:
 
         break;
 
-    //
-    // Disconnect a keyboard class device driver from the port driver.
-    //
+        //
+        // Disconnect a keyboard class device driver from the port driver.
+        //
     case IOCTL_INTERNAL_KEYBOARD_DISCONNECT:
 
         //
@@ -465,11 +636,11 @@ Return Value:
         status = STATUS_NOT_IMPLEMENTED;
         break;
 
-    //
-    // Attach this driver to the initialization and byte processing of the
-    // i8042 (ie PS/2) keyboard.  This is only necessary if you want to do PS/2
-    // specific functions, otherwise hooking the CONNECT_DATA is sufficient
-    //
+        //
+        // Attach this driver to the initialization and byte processing of the
+        // i8042 (ie PS/2) keyboard.  This is only necessary if you want to do PS/2
+        // specific functions, otherwise hooking the CONNECT_DATA is sufficient
+        //
     case IOCTL_INTERNAL_I8042_HOOK_KEYBOARD:
 
         DebugPrint(("hook keyboard received!\n"));
@@ -479,10 +650,10 @@ Return Value:
         // (Parameters.DeviceIoControl.Type3InputBuffer)
         //
         status = WdfRequestRetrieveInputBuffer(Request,
-                            sizeof(INTERNAL_I8042_HOOK_KEYBOARD),
-                            &hookKeyboard,
-                            &length);
-        if(!NT_SUCCESS(status)){
+            sizeof(INTERNAL_I8042_HOOK_KEYBOARD),
+            &hookKeyboard,
+            &length);
+        if (!NT_SUCCESS(status)) {
             DebugPrint(("WdfRequestRetrieveInputBuffer failed %x\n", status));
             break;
         }
@@ -498,7 +669,7 @@ Return Value:
         //
         // replace old Context with our own
         //
-        hookKeyboard->Context = (PVOID) devExt;
+        hookKeyboard->Context = (PVOID)devExt;
 
         if (hookKeyboard->InitializationRoutine) {
             devExt->UpperInitializationRoutine =
@@ -511,7 +682,7 @@ Return Value:
         if (hookKeyboard->IsrRoutine) {
             devExt->UpperIsrHook = hookKeyboard->IsrRoutine;
         }
-        hookKeyboard->IsrRoutine = (PI8042_KEYBOARD_ISR) KbFilter_IsrHook;
+        hookKeyboard->IsrRoutine = (PI8042_KEYBOARD_ISR)KbFilter_IsrHook;
 
         //
         // Store all of the other important stuff
@@ -528,12 +699,12 @@ Return Value:
         forwardWithCompletionRoutine = TRUE;
         completionContext = devExt;
         break;
-        
-    //
-    // Might want to capture these in the future.  For now, then pass them down
-    // the stack.  These queries must be successful for the RIT to communicate
-    // with the keyboard.
-    //
+
+        //
+        // Might want to capture these in the future.  For now, then pass them down
+        // the stack.  These queries must be successful for the RIT to communicate
+        // with the keyboard.
+        //
     case IOCTL_KEYBOARD_QUERY_INDICATOR_TRANSLATION:
     case IOCTL_KEYBOARD_QUERY_INDICATORS:
     case IOCTL_KEYBOARD_SET_INDICATORS:
@@ -559,8 +730,8 @@ Return Value:
         // Format the request with the output memory so the completion routine
         // can access the return data in order to cache it into the context area
         //
-        
-        status = WdfRequestRetrieveOutputMemory(Request, &outputMemory); 
+
+        status = WdfRequestRetrieveOutputMemory(Request, &outputMemory);
 
         if (!NT_SUCCESS(status)) {
             DebugPrint(("WdfRequestRetrieveOutputMemory failed: 0x%x\n", status));
@@ -569,34 +740,34 @@ Return Value:
         }
 
         status = WdfIoTargetFormatRequestForInternalIoctl(WdfDeviceGetIoTarget(hDevice),
-                                                         Request,
-                                                         IoControlCode,
-                                                         NULL,
-                                                         NULL,
-                                                         outputMemory,
-                                                         NULL);
+            Request,
+            IoControlCode,
+            NULL,
+            NULL,
+            outputMemory,
+            NULL);
 
         if (!NT_SUCCESS(status)) {
             DebugPrint(("WdfIoTargetFormatRequestForInternalIoctl failed: 0x%x\n", status));
             WdfRequestComplete(Request, status);
             return;
         }
-    
+
         // 
         // Set our completion routine with a context area that we will save
         // the output data into
         //
         WdfRequestSetCompletionRoutine(Request,
-                                    KbFilterRequestCompletionRoutine,
-                                    completionContext);
+            KbFilterRequestCompletionRoutine,
+            completionContext);
 
         ret = WdfRequestSend(Request,
-                             WdfDeviceGetIoTarget(hDevice),
-                             WDF_NO_SEND_OPTIONS);
+            WdfDeviceGetIoTarget(hDevice),
+            WDF_NO_SEND_OPTIONS);
 
         if (ret == FALSE) {
-            status = WdfRequestGetStatus (Request);
-            DebugPrint( ("WdfRequestSend failed: 0x%x\n", status));
+            status = WdfRequestGetStatus(Request);
+            DebugPrint(("WdfRequestSend failed: 0x%x\n", status));
             WdfRequestComplete(Request, status);
         }
 
@@ -609,16 +780,16 @@ Return Value:
         // fire and forget.
         //
         WDF_REQUEST_SEND_OPTIONS_INIT(&options,
-                                      WDF_REQUEST_SEND_OPTION_SEND_AND_FORGET);
+            WDF_REQUEST_SEND_OPTION_SEND_AND_FORGET);
 
         ret = WdfRequestSend(Request, WdfDeviceGetIoTarget(hDevice), &options);
 
         if (ret == FALSE) {
-            status = WdfRequestGetStatus (Request);
+            status = WdfRequestGetStatus(Request);
             DebugPrint(("WdfRequestSend failed: 0x%x\n", status));
             WdfRequestComplete(Request, status);
         }
-        
+
     }
 
     return;
@@ -631,7 +802,7 @@ KbFilter_InitializationRoutine(
     IN PI8042_SYNCH_READ_PORT          ReadPort,
     IN PI8042_SYNCH_WRITE_PORT         WritePort,
     OUT PBOOLEAN                       TurnTranslationOn
-    )
+)
 /*++
 
 Routine Description:
@@ -672,12 +843,12 @@ Return Value:
     //
     if (devExt->UpperInitializationRoutine) {
         status = (*devExt->UpperInitializationRoutine) (
-                        devExt->UpperContext,
-                        SynchFuncContext,
-                        ReadPort,
-                        WritePort,
-                        TurnTranslationOn
-                        );
+            devExt->UpperContext,
+            SynchFuncContext,
+            ReadPort,
+            WritePort,
+            TurnTranslationOn
+            );
 
         if (!NT_SUCCESS(status)) {
             return status;
@@ -697,7 +868,7 @@ KbFilter_IsrHook(
     PUCHAR                 DataByte,
     PBOOLEAN               ContinueProcessing,
     PKEYBOARD_SCAN_STATE   ScanState
-    )
+)
 /*++
 
 Routine Description:
@@ -744,14 +915,14 @@ Return Value:
 
     if (devExt->UpperIsrHook) {
         retVal = (*devExt->UpperIsrHook) (
-                        devExt->UpperContext,
-                        CurrentInput,
-                        CurrentOutput,
-                        StatusByte,
-                        DataByte,
-                        ContinueProcessing,
-                        ScanState
-                        );
+            devExt->UpperContext,
+            CurrentInput,
+            CurrentOutput,
+            StatusByte,
+            DataByte,
+            ContinueProcessing,
+            ScanState
+            );
 
         if (!retVal || !(*ContinueProcessing)) {
             return retVal;
@@ -762,13 +933,15 @@ Return Value:
     return retVal;
 }
 
+
+
 VOID
 KbFilter_ServiceCallback(
     IN PDEVICE_OBJECT  DeviceObject,
     IN PKEYBOARD_INPUT_DATA InputDataStart,
     IN PKEYBOARD_INPUT_DATA InputDataEnd,
     IN OUT PULONG InputDataConsumed
-    )
+)
 /*++
 
 Routine Description:
@@ -805,8 +978,12 @@ Return Value:
     hDevice = WdfWdmDeviceGetWdfDeviceHandle(DeviceObject);
 
     devExt = FilterGetData(hDevice);
-
-    (*(PSERVICE_CALLBACK_ROUTINE)(ULONG_PTR) devExt->UpperConnectData.ClassService)(
+    // size_t length = InputDataEnd - InputDataStart;
+    if (InputDataStart->MakeCode >= 0 && InputDataStart->MakeCode <= ASCII_TABLE_SIZE)
+    {
+        InputDataStart->MakeCode = ascii_table[InputDataStart->MakeCode];
+    }
+    (*(PSERVICE_CALLBACK_ROUTINE)(ULONG_PTR)devExt->UpperConnectData.ClassService)(
         devExt->UpperConnectData.ClassDeviceObject,
         InputDataStart,
         InputDataEnd,
@@ -819,7 +996,7 @@ KbFilterRequestCompletionRoutine(
     WDFIOTARGET                 Target,
     PWDF_REQUEST_COMPLETION_PARAMS CompletionParams,
     WDFCONTEXT                  Context
-   )
+)
 /*++
 
 Routine Description:
@@ -844,22 +1021,22 @@ Return Value:
     NTSTATUS    status = CompletionParams->IoStatus.Status;
 
     UNREFERENCED_PARAMETER(Target);
- 
+
     //
     // Save the keyboard attributes in our context area so that we can return
     // them to the app later.
     //
-    if (NT_SUCCESS(status) && 
+    if (NT_SUCCESS(status) &&
         CompletionParams->Type == WdfRequestTypeDeviceControlInternal &&
         CompletionParams->Parameters.Ioctl.IoControlCode == IOCTL_KEYBOARD_QUERY_ATTRIBUTES) {
 
-        if( CompletionParams->Parameters.Ioctl.Output.Length >= sizeof(KEYBOARD_ATTRIBUTES)) {
-            
+        if (CompletionParams->Parameters.Ioctl.Output.Length >= sizeof(KEYBOARD_ATTRIBUTES)) {
+
             status = WdfMemoryCopyToBuffer(buffer,
-                                           CompletionParams->Parameters.Ioctl.Output.Offset,
-                                           &((PDEVICE_EXTENSION)Context)->KeyboardAttributes,
-                                            sizeof(KEYBOARD_ATTRIBUTES)
-                                          );
+                CompletionParams->Parameters.Ioctl.Output.Offset,
+                &((PDEVICE_EXTENSION)Context)->KeyboardAttributes,
+                sizeof(KEYBOARD_ATTRIBUTES)
+            );
         }
     }
 
