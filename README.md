@@ -1,3 +1,6 @@
+This driver shuffles ascii keyboard codes & sends to userspace by file (needs to be encrypted) & update frequently..
+
+
 Keyboard Input WDF Filter Driver (Kbfiltr)
 ==========================================
 
